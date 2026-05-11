@@ -1,0 +1,15 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: granite-8b-metrics
+  namespace: maas-demo
+  labels:
+    app: granite-8b
+spec:
+  selector:
+    matchLabels:
+      app: granite-8b
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s

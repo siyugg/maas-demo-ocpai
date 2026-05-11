@@ -1,0 +1,16 @@
+# Never commit filled-in secrets
+openshift/backend/secret.yaml
+openshift/mcp-server/secret.yaml
+backend/.env
+**/*.env
+
+# Build artifacts
+frontend/dist/
+frontend/node_modules/
+__pycache__/
+*.pyc
+.venv/
+
+# Local tooling
+.DS_Store
+*.swp

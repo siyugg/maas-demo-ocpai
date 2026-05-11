@@ -1,0 +1,11 @@
+FROM registry.access.redhat.com/ubi9/python-311:latest
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY server.py .
+
+USER 1001
+EXPOSE 8000
+CMD ["python", "server.py"]

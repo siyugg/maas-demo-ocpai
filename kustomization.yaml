@@ -1,0 +1,26 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: maas-demo
+
+resources:
+  # Service account
+  - openshift/backend/serviceaccount.yaml
+
+  # MCP server
+  - openshift/mcp-server/deployment.yaml
+  - openshift/mcp-server/service.yaml
+
+  # Backend BFF
+  - openshift/backend/configmap.yaml
+  - openshift/backend/deployment.yaml
+  - openshift/backend/service.yaml
+  - openshift/backend/hpa.yaml
+
+  # Frontend
+  - openshift/frontend/deployment.yaml
+  - openshift/frontend/service.yaml
+  - openshift/frontend/route.yaml
+
+  # Monitoring
+  - openshift/monitoring/service-monitor-granite.yaml

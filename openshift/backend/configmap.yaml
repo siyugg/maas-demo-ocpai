@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  namespace: maas-demo
+data:
+  MCP_SERVER_URL: "http://mcp-server.maas-demo.svc.cluster.local:8000"
+  GRANITE_ENDPOINT: "https://granite-8b-predictor.maas-demo.svc.cluster.local:8443/v1"
+  GRANITE_MODEL_NAME: "granite-8b"
+  GRANITE_VERIFY_SSL: "false"   # internal self-signed cert
+  QWEN_ENDPOINT: "https://qwen3-8b-predictor.maas-demo.svc.cluster.local:8443/v1"
+  QWEN_MODEL_NAME: "qwen3-8b"
+  QWEN_VERIFY_SSL: "false"
+  CORS_ORIGINS: "*"

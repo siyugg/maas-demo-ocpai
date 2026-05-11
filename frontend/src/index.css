@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body, #root {
+    @apply h-full bg-rh-darker text-rh-text font-sans;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track { @apply bg-rh-dark; }
+  ::-webkit-scrollbar-thumb { @apply bg-rh-border rounded-full; }
+  ::-webkit-scrollbar-thumb:hover { @apply bg-rh-muted; }
+}
+
+/* Leaflet dark overrides */
+.leaflet-container {
+  background: #1a1a2e !important;
+  font-family: inherit;
+}
+.leaflet-tile { filter: brightness(0.7) saturate(0.8); }
+.leaflet-popup-content-wrapper {
+  background: #1e1e1e;
+  color: #e5e5e5;
+  border: 1px solid #333;
+  border-radius: 8px;
+}
+.leaflet-popup-tip { background: #1e1e1e; }
+
+/* SSE token stream animation */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+.cursor-blink::after {
+  content: '▊';
+  @apply text-rh-red;
+  animation: blink 1s step-end infinite;
+}
+
+/* Pulse animation for highlighted map marker */
+@keyframes pulse-ring {
+  0%   { transform: scale(0.8); opacity: 1; }
+  100% { transform: scale(2.4); opacity: 0; }
+}
+.marker-pulse::before {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 2px solid #EE0000;
+  animation: pulse-ring 1.5s ease-out infinite;
+}

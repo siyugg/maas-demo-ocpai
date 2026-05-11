@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: maas-demo
+  labels:
+    app: backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      serviceAccountName: maas-demo-sa
+      containers:
+        - name: backend
+          image: default-route-openshift-image-registry.apps.ocp.kr6vb.sandbox2859.opentlc.com/maas-demo/backend:latest
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: backend-config
+          env:
+            - name: GRANITE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: default-token-granite-8b-sa
+                  key: token
+            - name: QWEN_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: default-token-qwen3-8b-sa
+                  key: token
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
