@@ -4,6 +4,10 @@ kind: Kustomization
 namespace: maas-demo
 
 resources:
+  # Internal image registry objects (ImageStreams + BuildConfigs)
+  - openshift/build/imagestreams.yaml
+  - openshift/build/buildconfigs.yaml
+
   # Service account
   - openshift/backend/serviceaccount.yaml
 

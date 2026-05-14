@@ -3,6 +3,9 @@ kind: Deployment
 metadata:
   name: backend
   namespace: maas-demo
+  annotations:
+    image.openshift.io/triggers: >-
+      [{"from":{"kind":"ImageStreamTag","name":"backend:latest","namespace":"maas-demo"},"fieldPath":"spec.template.spec.containers[?(@.name==\"backend\")].image","pause":"false"}]
   labels:
     app: backend
 spec:
@@ -18,7 +21,7 @@ spec:
       serviceAccountName: maas-demo-sa
       containers:
         - name: backend
-          image: default-route-openshift-image-registry.apps.ocp.kr6vb.sandbox2859.opentlc.com/maas-demo/backend:latest
+          image: image-registry.openshift-image-registry.svc:5000/maas-demo/backend:latest
           ports:
             - containerPort: 8080
           envFrom:

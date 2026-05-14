@@ -6,14 +6,14 @@ export default {
     extend: {
       colors: {
         rh: {
-          red: '#EE0000',
-          darkred: '#BE0000',
-          dark: '#151515',
-          darker: '#0d0d0d',
-          surface: '#1e1e1e',
-          border: '#333333',
-          muted: '#6b7280',
-          text: '#e5e5e5',
+          red: 'rgb(var(--rh-red) / <alpha-value>)',
+          darkred: 'rgb(var(--rh-darkred) / <alpha-value>)',
+          dark: 'rgb(var(--rh-dark) / <alpha-value>)',
+          darker: 'rgb(var(--rh-darker) / <alpha-value>)',
+          surface: 'rgb(var(--rh-surface) / <alpha-value>)',
+          border: 'rgb(var(--rh-border) / <alpha-value>)',
+          muted: 'rgb(var(--rh-muted) / <alpha-value>)',
+          text: 'rgb(var(--rh-text) / <alpha-value>)',
         },
       },
       fontFamily: {

@@ -31,6 +31,7 @@ logger = logging.getLogger("mcp-client")
 # ---------------------------------------------------------------------------
 _call_log: deque = deque(maxlen=200)
 _call_log_subscribers: list = []
+_audit_log: deque = deque(maxlen=500)
 
 
 def _notify_subscribers(event: dict):
@@ -59,6 +60,25 @@ def unsubscribe_call_log(q: asyncio.Queue):
         _call_log_subscribers.remove(q)
     except ValueError:
         pass
+
+
+def record_audit_entry(entry: dict):
+    """Record an enterprise-mode audit entry."""
+    normalized = {
+        "id": str(uuid.uuid4())[:8],
+        "timestamp": entry.get("timestamp", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())),
+        "actor": entry.get("actor", "anonymous-demo-user"),
+        "model": entry.get("model", ""),
+        "model_label": entry.get("model_label", ""),
+        "tools": entry.get("tools", []),
+        "policy_mode": entry.get("policy_mode", "enterprise"),
+        "decision_confidence": entry.get("decision_confidence"),
+    }
+    _audit_log.appendleft(normalized)
+
+
+def get_audit_log() -> list[dict]:
+    return list(_audit_log)
 
 
 # ---------------------------------------------------------------------------

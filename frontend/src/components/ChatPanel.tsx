@@ -1,16 +1,62 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import type { ChatMessage, ModelKey, ToolCallEvent } from '../types'
 import { streamChat } from '../api/chat'
 import MessageBubble from './MessageBubble'
 import { newMsgId } from '../App'
 
-const SUGGESTED_PROMPTS = [
-  "What's the weather like in Tampines right now?",
-  "Will it rain anywhere in Singapore today?",
-  "What's the 4-day forecast for Singapore?",
-  "Which areas have thundery showers currently?",
-  "What's the temperature and humidity in the east?",
-]
+const PROMPT_POOLS = {
+  general: [
+    'Should I send the technician to inspect the rooftop equipment at Jurong now?',
+    'Can we proceed with the Marina Bay crane lift this afternoon, or delay?',
+    'Should we switch tonight deliveries to MRT near Raffles Place due to traffic risk?',
+    'Is it safe to run facade cleaning at Paya Lebar between 2pm and 5pm?',
+    'Do I trigger standby crews for flooding risk in Bukit Timah this evening?',
+    'Should we reroute service vans away from CBD for tomorrow morning peak?',
+    'Can the maintenance team start outdoor cable works at Tuas at 9am?',
+    'Do we keep the rooftop event at Changi or move it indoors?',
+  ],
+  rain: [
+    'Should I dispatch the Jurong rooftop inspection team in the next 2 hours if rain risk is high?',
+    'Will thundery showers disrupt outdoor inspections in Woodlands this evening?',
+    'Which zones look driest right now for urgent field maintenance?',
+    'Should I hold back high-altitude work near Tuas until weather stabilizes?',
+    'When is the safest weather window for site visits across the west today?',
+    'Do we need rain contingency crews near low-lying areas tonight?',
+  ],
+  forecast: [
+    'Should we schedule preventive maintenance in Jurong tomorrow morning or afternoon?',
+    'For the next 4 days, which day is best for rooftop equipment audits?',
+    'Will weather shifts this week affect outdoor service-level commitments?',
+    'Should I plan weekend manpower with weather buffers for east-region works?',
+    'Which period over the next few days has the lowest operational weather risk?',
+    'Do we move non-urgent external inspections to a lower-risk day this week?',
+  ],
+  tempHumidity: [
+    'Is it too hot/humid now for technicians to do prolonged rooftop work in the west?',
+    'Which region has the highest heat-stress risk for field teams right now?',
+    'Should I add rest-cycle buffers for outdoor crews based on current humidity?',
+    'Compare heat exposure risk for teams in Jurong vs Tampines this hour.',
+    'Do we need hydration and shorter shift protocols for today afternoon?',
+    'Which area is coolest now for rescheduling outdoor maintenance jobs?',
+  ],
+} as const
+
+function inferPromptTopic(messages: ChatMessage[]): keyof typeof PROMPT_POOLS {
+  const lastUser = [...messages].reverse().find(m => m.role === 'user')?.content.toLowerCase() ?? ''
+  if (/(rain|storm|thunder|shower|wet)/.test(lastUser)) return 'rain'
+  if (/(forecast|tomorrow|week|weekend|day|days)/.test(lastUser)) return 'forecast'
+  if (/(temp|temperature|humidity|hot|cool|heat)/.test(lastUser)) return 'tempHumidity'
+  return 'general'
+}
+
+function buildPromptSuggestions(messages: ChatMessage[]): string[] {
+  const topic = inferPromptTopic(messages)
+  const pool = PROMPT_POOLS[topic]
+  const userTurns = messages.filter(m => m.role === 'user').length
+  const offset = userTurns % pool.length
+  const rotated = [...pool.slice(offset), ...pool.slice(0, offset)]
+  return rotated.slice(0, 6)
+}
 
 const MODEL_CONFIG: Record<string, { label: string; color: string }> = {
   granite: { label: 'Granite-8B', color: '#EE0000' },
@@ -21,32 +67,18 @@ interface Props {
   messages: ChatMessage[]
   setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>
   model: ModelKey
-  setModel: (m: ModelKey) => void
-  availableModels: ModelKey[]
-  setAvailableModels: (models: ModelKey[]) => void
   onMapUpdate: (areas: string[]) => void
 }
 
 export default function ChatPanel({
-  messages, setMessages, model, setModel, availableModels, setAvailableModels, onMapUpdate,
+  messages, setMessages, model, onMapUpdate,
 }: Props) {
   const [input, setInput] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-
-  // Fetch which models are actually configured in the backend (once on mount)
-  useEffect(() => {
-    fetch('/admin/info')
-      .then(r => r.json())
-      .then(data => {
-        const models: ModelKey[] = data.available_models ?? ['granite']
-        setAvailableModels(models)
-        if (!models.includes(model)) setModel(models[0])
-      })
-      .catch(() => { /* keep default */ })
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  const suggestedPrompts = useMemo(() => buildPromptSuggestions(messages), [messages])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -74,6 +106,7 @@ export default function ChatPanel({
     abortRef.current = ctrl
 
     const history = [...messages, userMsg]
+    const phaseMarks: Record<string, number> = {}
 
     await streamChat(history, model, {
       onToken: (text) => {
@@ -90,10 +123,57 @@ export default function ChatPanel({
           )
         )
       },
-      onMapUpdate,
-      onDone: (_, label) => {
+      onDecisionCard: (card) => {
         setMessages(prev =>
-          prev.map(m => m.id === assistantId ? { ...m, streaming: false } : m)
+          prev.map(m =>
+            m.id === assistantId
+              ? { ...m, decisionCard: card }
+              : m
+          )
+        )
+      },
+      onPhaseStart: (phase, tMs) => {
+        phaseMarks[phase] = tMs
+        setMessages(prev =>
+          prev.map(m => {
+            if (m.id !== assistantId) return m
+            const current = m.phaseLatenciesMs ?? { weather_specialist: 0, transport_specialist: 0, fusion: 0 }
+            if (phase === 'transport_specialist' && phaseMarks.weather_specialist != null) {
+              return {
+                ...m,
+                phaseLatenciesMs: {
+                  ...current,
+                  weather_specialist: Math.max(0, tMs - phaseMarks.weather_specialist),
+                },
+              }
+            }
+            if (phase === 'fusion' && phaseMarks.transport_specialist != null) {
+              return {
+                ...m,
+                phaseLatenciesMs: {
+                  ...current,
+                  transport_specialist: Math.max(0, tMs - phaseMarks.transport_specialist),
+                },
+              }
+            }
+            return { ...m, phaseLatenciesMs: current }
+          }),
+        )
+      },
+      onMapUpdate,
+      onDone: (payload) => {
+        setMessages(prev =>
+          prev.map(m =>
+            m.id === assistantId
+              ? {
+                ...m,
+                streaming: false,
+                decisionCard: payload.decision_card ?? m.decisionCard,
+                evidence: payload.evidence ?? m.evidence,
+                phaseLatenciesMs: payload.phase_latencies_ms ?? m.phaseLatenciesMs,
+              }
+              : m,
+          )
         )
         setIsStreaming(false)
       },
@@ -108,7 +188,7 @@ export default function ChatPanel({
         setIsStreaming(false)
       },
     }, ctrl.signal)
-  }, [messages, model, isStreaming, onMapUpdate])
+  }, [messages, model, isStreaming, onMapUpdate, setMessages])
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -135,26 +215,11 @@ export default function ChatPanel({
       <div className="flex items-center justify-between px-4 py-2.5 border-b border-rh-border bg-rh-dark shrink-0">
         <span className="text-sm font-medium text-rh-text">Chat</span>
         <div className="flex items-center gap-3">
-          {/* Model toggle — only shown when multiple models are available */}
-          <div className="flex items-center gap-2 bg-rh-surface rounded-full px-1 py-1">
-            {availableModels.map(m => (
-              <button
-                key={m}
-                onClick={() => !isStreaming && setModel(m)}
-                disabled={isStreaming}
-                title={MODEL_CONFIG[m]?.label ?? m}
-                className={`px-3 py-0.5 rounded-full text-xs font-medium transition-all ${
-                  model === m
-                    ? 'text-white shadow'
-                    : 'text-rh-muted hover:text-rh-text'
-                }`}
-                style={model === m ? { backgroundColor: MODEL_CONFIG[m]?.color ?? '#888' } : {}}
-              >
-                {MODEL_CONFIG[m]?.label ?? m}
-              </button>
-            ))}
+          <div className="text-xs text-rh-muted">
+            Active model: <span className="text-rh-text">{MODEL_CONFIG[model]?.label ?? model}</span> (set in Admin)
           </div>
           <button
+            type="button"
             onClick={clearChat}
             disabled={isStreaming}
             className="text-xs text-rh-muted hover:text-rh-text transition-colors disabled:opacity-40"
@@ -183,17 +248,29 @@ export default function ChatPanel({
         <div ref={bottomRef} />
       </div>
 
-      {/* Quick-question chips — always visible */}
-      <div className="border-t border-rh-border/50 px-3 pt-2 pb-1 shrink-0 bg-rh-dark">
-        <div className="flex flex-wrap gap-1.5">
-          {SUGGESTED_PROMPTS.map(p => (
+      {/* Dynamic quick-question chips — refreshed after every prompt */}
+      <div className="border-t border-rh-border/50 px-3 pt-2 pb-2 shrink-0 bg-rh-dark">
+        <div className="mb-2 flex items-center justify-between">
+          <span className="text-[11px] uppercase tracking-wide text-rh-muted font-semibold">
+            Suggested Questions
+          </span>
+          <span className="text-[11px] text-rh-muted/70">
+            updates each turn
+          </span>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+          {suggestedPrompts.map(p => (
             <button
+              type="button"
               key={p}
               onClick={() => sendMessage(p)}
               disabled={isStreaming}
-              className="text-xs px-2.5 py-1 rounded-full bg-rh-surface border border-rh-border text-rh-muted hover:text-rh-text hover:border-rh-red/40 transition-all disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+              className="group text-left text-xs px-2.5 py-2 rounded-lg bg-gradient-to-r from-rh-surface to-rh-darker border border-rh-border text-rh-muted hover:text-rh-text hover:border-rh-red/40 hover:from-rh-surface hover:to-rh-surface/80 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              {p}
+              <span className="inline-flex items-center gap-1">
+                <span className="text-rh-red/70 group-hover:text-rh-red">{'>'}</span>
+                {p}
+              </span>
             </button>
           ))}
         </div>
@@ -207,7 +284,7 @@ export default function ChatPanel({
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask about Singapore weather…"
+            placeholder="Ask an operational decision question..."
             rows={1}
             className="flex-1 bg-rh-surface border border-rh-border rounded-lg px-3 py-2 text-sm text-rh-text placeholder-rh-muted resize-none focus:outline-none focus:border-rh-red/50 max-h-32"
             style={{ minHeight: '38px' }}
@@ -215,6 +292,7 @@ export default function ChatPanel({
           />
           {isStreaming ? (
             <button
+              type="button"
               onClick={stopStreaming}
               className="px-3 py-2 bg-rh-surface border border-rh-border rounded-lg text-sm text-rh-muted hover:text-red-400 hover:border-red-400/40 transition-colors shrink-0"
             >
@@ -222,6 +300,7 @@ export default function ChatPanel({
             </button>
           ) : (
             <button
+              type="button"
               onClick={() => sendMessage(input)}
               disabled={!input.trim()}
               className="px-3 py-2 bg-rh-red hover:bg-rh-darkred text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"

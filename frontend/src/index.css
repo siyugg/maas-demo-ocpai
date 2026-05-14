@@ -2,6 +2,29 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --rh-red: 238 0 0;
+  --rh-darkred: 190 0 0;
+}
+
+.theme-dark {
+  --rh-dark: 21 21 21;
+  --rh-darker: 13 13 13;
+  --rh-surface: 30 30 30;
+  --rh-border: 51 51 51;
+  --rh-muted: 107 114 128;
+  --rh-text: 229 229 229;
+}
+
+.theme-light {
+  --rh-dark: 255 255 255;
+  --rh-darker: 247 247 249;
+  --rh-surface: 255 255 255;
+  --rh-border: 215 215 220;
+  --rh-muted: 96 103 112;
+  --rh-text: 21 21 21;
+}
+
 @layer base {
   html, body, #root {
     @apply h-full bg-rh-darker text-rh-text font-sans;
@@ -16,19 +39,33 @@
   ::-webkit-scrollbar-thumb:hover { @apply bg-rh-muted; }
 }
 
-/* Leaflet dark overrides */
-.leaflet-container {
+/* Leaflet dark theme overrides */
+.theme-dark .leaflet-container {
   background: #1a1a2e !important;
   font-family: inherit;
 }
-.leaflet-tile { filter: brightness(0.7) saturate(0.8); }
-.leaflet-popup-content-wrapper {
+.theme-dark .leaflet-tile { filter: brightness(0.7) saturate(0.8); }
+.theme-dark .leaflet-popup-content-wrapper {
   background: #1e1e1e;
   color: #e5e5e5;
   border: 1px solid #333;
   border-radius: 8px;
 }
-.leaflet-popup-tip { background: #1e1e1e; }
+.theme-dark .leaflet-popup-tip { background: #1e1e1e; }
+
+/* Leaflet light theme overrides */
+.theme-light .leaflet-container {
+  background: #f8fafc !important;
+  font-family: inherit;
+}
+.theme-light .leaflet-tile { filter: none; }
+.theme-light .leaflet-popup-content-wrapper {
+  background: #ffffff;
+  color: #111827;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+}
+.theme-light .leaflet-popup-tip { background: #ffffff; }
 
 /* SSE token stream animation */
 @keyframes blink {

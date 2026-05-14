@@ -1,10 +1,27 @@
-import type { ChatMessage, ModelKey, ToolCallEvent } from '../types'
+import type {
+  ChatMessage,
+  DecisionCard,
+  EvidencePayload,
+  ModelKey,
+  PhaseLatencyPayload,
+  ToolCallEvent,
+} from '../types'
+
+export interface DonePayload {
+  model: ModelKey
+  model_label: string
+  decision_card?: DecisionCard
+  evidence?: EvidencePayload
+  phase_latencies_ms?: PhaseLatencyPayload
+}
 
 export interface ChatStreamCallbacks {
   onToken: (text: string, model: ModelKey) => void
   onToolCall: (event: ToolCallEvent) => void
   onMapUpdate: (areas: string[]) => void
-  onDone: (model: ModelKey, label: string) => void
+  onDecisionCard: (card: DecisionCard) => void
+  onPhaseStart: (phase: string, tMs: number) => void
+  onDone: (payload: DonePayload) => void
   onError: (message: string) => void
 }
 
@@ -63,8 +80,16 @@ export async function streamChat(
             case 'map_update':
               callbacks.onMapUpdate(data.areas)
               break
+            case 'decision_card':
+              callbacks.onDecisionCard(data)
+              break
+            case 'weather_specialist_start':
+            case 'transport_specialist_start':
+            case 'fusion_start':
+              callbacks.onPhaseStart(data.phase ?? eventType.replace('_start', ''), data.t_ms ?? 0)
+              break
             case 'done':
-              callbacks.onDone(data.model, data.model_label)
+              callbacks.onDone(data)
               break
             case 'error':
               callbacks.onError(data.message)

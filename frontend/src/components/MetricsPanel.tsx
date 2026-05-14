@@ -38,17 +38,31 @@ function MetricCard({ metrics }: { metrics: ModelMetrics }) {
       <div className="text-xs text-rh-muted mb-3">
         ns: <span className="text-rh-text">{metrics.namespace}</span>
       </div>
+      {metrics.endpoint && (
+        <div className="text-[11px] text-rh-muted mb-3 font-mono break-all">
+          endpoint: <span className="text-rh-text">{metrics.endpoint}</span>
+        </div>
+      )}
 
       {isOk ? (
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
           <StatTile
             label="Tokens generated"
             value={metrics.tokens_total?.toLocaleString() ?? '—'}
             unit="total"
           />
           <StatTile
+            label="Total tokens"
+            value={metrics.total_tokens?.toLocaleString() ?? '—'}
+            unit="sum"
+          />
+          <StatTile
             label="Avg latency"
             value={metrics.avg_latency_s != null ? `${metrics.avg_latency_s.toFixed(2)}s` : '—'}
+          />
+          <StatTile
+            label="Avg TTFT"
+            value={metrics.avg_ttft_s != null ? `${metrics.avg_ttft_s.toFixed(2)}s` : '—'}
           />
           <StatTile
             label="GPU KV cache"
@@ -57,6 +71,20 @@ function MetricCard({ metrics }: { metrics: ModelMetrics }) {
           <StatTile
             label="Active / queued"
             value={`${metrics.requests_running ?? 0} / ${metrics.requests_waiting ?? 0}`}
+          />
+          <StatTile
+            label="Generation throughput"
+            value={metrics.generation_tps != null ? `${metrics.generation_tps.toFixed(1)}` : '—'}
+            unit="tok/s"
+          />
+          <StatTile
+            label="Prompt throughput"
+            value={metrics.prompt_tps != null ? `${metrics.prompt_tps.toFixed(1)}` : '—'}
+            unit="tok/s"
+          />
+          <StatTile
+            label="Queue ratio"
+            value={metrics.queue_ratio != null ? `${(metrics.queue_ratio * 100).toFixed(1)}%` : '—'}
           />
         </div>
       ) : (
@@ -94,8 +122,8 @@ export default function MetricsPanel() {
 
       const point: DataPoint = {
         time: new Date().toLocaleTimeString('en-SG', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-        granite: data.granite?.tokens_total,
-        qwen: data.qwen?.tokens_total,
+        granite: data.models.granite?.tokens_total,
+        qwen: data.models.qwen?.tokens_total,
       }
       setHistory(prev => [...prev.slice(-30), point])
     } catch (e: any) {
@@ -126,10 +154,21 @@ export default function MetricsPanel() {
         </div>
       )}
 
+      {/* Fleet-level MaaS KPI row */}
+      {metrics && (
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+          <StatTile label="Models Healthy" value={`${metrics.fleet.models_healthy}/${metrics.fleet.models_total}`} />
+          <StatTile label="Fleet Gen TPS" value={metrics.fleet.generation_tps_total.toFixed(1)} unit="tok/s" />
+          <StatTile label="Fleet TTFT" value={`${metrics.fleet.avg_ttft_s.toFixed(2)}s`} />
+          <StatTile label="In-flight / queued" value={`${metrics.fleet.requests_running_total} / ${metrics.fleet.requests_waiting_total}`} />
+          <StatTile label="MCP success rate" value={`${(metrics.fleet.mcp_success_rate * 100).toFixed(1)}%`} />
+        </div>
+      )}
+
       {/* Side-by-side model cards — one per configured model */}
       {metrics && (
         <div className="flex gap-3 flex-wrap">
-          {Object.values(metrics).map(m => (
+          {(Object.values(metrics.models) as ModelMetrics[]).map(m => (
             <MetricCard key={m.model} metrics={m} />
           ))}
         </div>
@@ -143,13 +182,17 @@ export default function MetricsPanel() {
         {history.length > 1 ? (
           <ResponsiveContainer width="100%" height={160}>
             <LineChart data={history} margin={{ top: 4, right: 8, bottom: 0, left: -20 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#333" />
-              <XAxis dataKey="time" tick={{ fill: '#6b7280', fontSize: 10 }} interval="preserveStartEnd" />
-              <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} />
+              <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--rh-border) / 1)" />
+              <XAxis dataKey="time" tick={{ fill: 'rgb(var(--rh-muted) / 1)', fontSize: 10 }} interval="preserveStartEnd" />
+              <YAxis tick={{ fill: 'rgb(var(--rh-muted) / 1)', fontSize: 10 }} />
               <Tooltip
-                contentStyle={{ background: '#1e1e1e', border: '1px solid #333', borderRadius: 8 }}
-                labelStyle={{ color: '#e5e5e5', fontSize: 11 }}
-                itemStyle={{ fontSize: 11 }}
+                contentStyle={{
+                  background: 'rgb(var(--rh-surface) / 1)',
+                  border: '1px solid rgb(var(--rh-border) / 1)',
+                  borderRadius: 8,
+                }}
+                labelStyle={{ color: 'rgb(var(--rh-text) / 1)', fontSize: 11 }}
+                itemStyle={{ fontSize: 11, color: 'rgb(var(--rh-text) / 1)' }}
               />
               <Legend wrapperStyle={{ fontSize: 11 }} />
               <Line

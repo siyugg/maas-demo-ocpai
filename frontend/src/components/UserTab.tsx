@@ -7,13 +7,10 @@ interface Props {
   messages: ChatMessage[]
   setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>
   model: ModelKey
-  setModel: (m: ModelKey) => void
-  availableModels: ModelKey[]
-  setAvailableModels: (models: ModelKey[]) => void
 }
 
 export default function UserTab({
-  messages, setMessages, model, setModel, availableModels, setAvailableModels,
+  messages, setMessages, model,
 }: Props) {
   const [highlightedAreas, setHighlightedAreas] = useState<string[]>([])
 
@@ -30,9 +27,6 @@ export default function UserTab({
           messages={messages}
           setMessages={setMessages}
           model={model}
-          setModel={setModel}
-          availableModels={availableModels}
-          setAvailableModels={setAvailableModels}
           onMapUpdate={handleMapUpdate}
         />
       </div>

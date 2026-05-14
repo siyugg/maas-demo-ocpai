@@ -6,6 +6,8 @@ COPY package.json ./
 RUN npm install
 
 COPY . .
+ARG BUILD_TIME
+ENV VITE_BUILD_TIME=${BUILD_TIME}
 RUN npm run build
 
 # Stage 2: serve with nginx (amd64-safe, no JS execution)

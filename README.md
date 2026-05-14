@@ -1,179 +1,296 @@
 # MaaS Demo — Red Hat OpenShift AI
 
-A full-stack **Model as a Service** demo hosted on Red Hat OpenShift AI, featuring:
+A full-stack weather chatbot demonstrating **Model-as-a-Service** capabilities on Red Hat OpenShift AI.
 
-- **Live Singapore weather chat** powered by two LLMs (Granite-8B + Qwen3-8B)
-- **MCP (Model Context Protocol) server** connecting the LLMs to real-time data.gov.sg weather APIs
-- **Interactive Singapore map** that highlights areas mentioned in chat
-- **Admin panel** with live vLLM metrics for both models and a full MCP monitor
+**Live demo features:**
+- Chat interface powered by Granite-8B and Qwen3-8B via vLLM on RHOAI
+- Live Singapore weather data from [data.gov.sg](https://data.gov.sg) via an MCP server
+- Interactive Singapore weather map synchronized with chat queries
+- Admin panel showing live vLLM metrics for both models and MCP call logs
 
 ---
 
 ## Architecture
 
 ```
-Browser
-  │
-  ▼
-Frontend (React + Vite)          ← OpenShift Route (HTTPS)
-  │  nginx proxies /chat, /weather, /admin to backend
-  ▼
-Backend BFF (FastAPI)            ← maas-demo namespace
-  │  Agentic loop: LLM ↔ MCP
-  ├─── Granite-8B InferenceService (maas-demo ns)
-  ├─── Qwen3-8B InferenceService  (marketing-intern ns, via Route)
-  └─── MCP Weather Server         (maas-demo ns)
-         │
-         └─── api-open.data.gov.sg  (2-hour, 24-hour, 4-day forecast, temp, humidity)
+Browser (React)
+    │
+    ▼
+Nginx (frontend pod)  ──proxy──►  FastAPI BFF (backend pod)
+                                       │               │
+                                  MCP Server      data.gov.sg API
+                                  (weather tools)
+                                       │
+                          Granite-8B / Qwen3-8B
+                          (RHOAI InferenceService / vLLM)
+```
+
+### Components
+
+| Service | Language | Description |
+|---------|----------|-------------|
+| `frontend/` | React + Vite + Tailwind CSS | Two-tab SPA: User (chat + map) and Admin (metrics + MCP monitor) |
+| `backend/` | Python FastAPI | BFF: pre-fetches weather, injects context, streams chat via SSE |
+| `mcp-server/` | Python FastMCP | 5 weather tools over Streamable HTTP, wired to data.gov.sg |
+
+### OpenShift resources (`openshift/`)
+
+```
+openshift/
+  backend/          ConfigMap, Deployment, Service, HPA, ServiceAccount
+  frontend/         Deployment, Service, Route
+  mcp-server/       Deployment, Service
+  maas-demo/        InferenceService (Granite-8B)
+  monitoring/       ServiceMonitor (Prometheus scrape for vLLM metrics)
 ```
 
 ---
 
 ## Prerequisites
 
-- OpenShift cluster with **Red Hat OpenShift AI** operator installed
-- `oc` CLI authenticated to the cluster
-- `podman` for building images
-- Granite-8B deployed in `maas-demo` namespace (InferenceService name: `granite-8b`)
-- Qwen3-8B deployed in `marketing-intern` namespace (InferenceService name: `qwen3-8b`)
-- OpenShift internal image registry accessible
+| Tool | Version | Notes |
+|------|---------|-------|
+| `oc` CLI | 4.14+ | Logged in to your OpenShift cluster |
+| `podman` | 4+ | For building container images |
+| `node` | 20 | For local frontend development |
+| `python` | 3.11 | For local backend/mcp-server development |
 
 ---
 
-## Quick Start
+## Quick Start — Deploy to OpenShift
 
-### 1. Set up secrets
-
-Fill in your credentials:
+### 1. Set cluster variables
 
 ```bash
-# Backend secrets (model Bearer tokens + Qwen endpoint)
-cp openshift/backend/secret-template.yaml openshift/backend/secret.yaml
-# Edit secret.yaml: add GRANITE_API_KEY, QWEN_API_KEY, QWEN_ENDPOINT
-
-# MCP server secret (optional: data.gov.sg API key for higher rate limits)
-cp openshift/mcp-server/secret-template.yaml openshift/mcp-server/secret.yaml
-# Edit secret.yaml: add api-key if you have one
+export CLUSTER=apps.ocp.<your-cluster-domain>
+export REGISTRY=default-route-openshift-image-registry.${CLUSTER}
+export NAMESPACE=maas-demo
 ```
 
-> **Finding model Bearer tokens:**  
-> In the OpenShift AI dashboard → your project → the deployed model → copy the token shown under "Inference endpoint".
-
-### 2. Get the Qwen3-8B Route URL
+### 2. Enable the external image registry route (one-time)
 
 ```bash
-oc get route -n marketing-intern | grep qwen
+oc patch configs.imageregistry.operator.openshift.io/cluster \
+  --patch '{"spec":{"defaultRoute":true}}' --type=merge
 ```
 
-Paste the full HTTPS URL into `openshift/backend/secret.yaml` as `QWEN_ENDPOINT`.
-
-### 3. Build and deploy
+### 3. Create the namespace and ImageStreams
 
 ```bash
-# Log in to the internal registry
+oc new-project ${NAMESPACE} || oc project ${NAMESPACE}
+oc create imagestream backend   -n ${NAMESPACE}
+oc create imagestream frontend  -n ${NAMESPACE}
+oc create imagestream mcp-server -n ${NAMESPACE}
+```
+
+### 4. Log in to the registry
+
+```bash
 oc registry login
-
-make all
+podman login ${REGISTRY} --tls-verify=false
 ```
 
-Or step by step:
+### 5. Build and push all images
 
 ```bash
-make build    # podman build all three images
-make push     # push to OpenShift internal registry
-make deploy   # oc apply -k .
+BUILD_TIME=$(date +%Y%m%d-%H%M)
+
+# MCP server (amd64)
+podman build --platform linux/amd64 \
+  -t ${REGISTRY}/${NAMESPACE}/mcp-server:latest ./mcp-server
+podman push ${REGISTRY}/${NAMESPACE}/mcp-server:latest --tls-verify=false
+
+# Backend (amd64)
+podman build --platform linux/amd64 \
+  -t ${REGISTRY}/${NAMESPACE}/backend:latest ./backend
+podman push ${REGISTRY}/${NAMESPACE}/backend:latest --tls-verify=false
+
+# Frontend — two-step build (ARM64 native assets → amd64 nginx image)
+cd frontend
+podman build --target builder -t frontend-builder:local .
+CID=$(podman create frontend-builder:local)
+podman cp ${CID}:/app/dist ./dist
+podman rm ${CID}
+podman build --platform linux/amd64 \
+  --build-arg BUILD_TIME=${BUILD_TIME} \
+  -t ${REGISTRY}/${NAMESPACE}/frontend:latest \
+  -f - . <<'EOF'
+FROM registry.access.redhat.com/ubi9/nginx-120:latest
+COPY dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/nginx.conf
+EXPOSE 8080
+CMD ["nginx", "-g", "daemon off;"]
+EOF
+podman push ${REGISTRY}/${NAMESPACE}/frontend:latest --tls-verify=false
+cd ..
 ```
 
-### 4. Open the demo
+> **Why the two-step frontend build?**
+> Vite uses esbuild (a Go binary) which crashes under QEMU emulation on Apple Silicon.
+> The solution: build the JS assets natively (ARM64), extract the `dist/` folder,
+> then package them into an amd64 Nginx image without any JS execution.
+
+### 6. Deploy all resources
 
 ```bash
-make url      # prints the frontend Route URL
+oc apply -k . -n ${NAMESPACE}
+```
+
+Or individually:
+
+```bash
+oc apply -f openshift/backend/    -n ${NAMESPACE}
+oc apply -f openshift/frontend/   -n ${NAMESPACE}
+oc apply -f openshift/mcp-server/ -n ${NAMESPACE}
+```
+
+### 7. Get the app URL
+
+```bash
+oc get route frontend -n ${NAMESPACE} -o jsonpath='{.spec.host}'
 ```
 
 ---
 
-## Component Details
+## Update a Single Service (after code changes)
 
-### MCP Weather Server (`mcp-server/`)
+### Backend only
 
-Python service using the official `mcp` SDK with **Streamable HTTP** transport.
+```bash
+podman build --platform linux/amd64 -t ${REGISTRY}/${NAMESPACE}/backend:latest ./backend
+podman push ${REGISTRY}/${NAMESPACE}/backend:latest --tls-verify=false
+oc rollout restart deployment/backend -n ${NAMESPACE}
+```
 
-| Tool | Description | API endpoint |
-|------|-------------|--------------|
-| `get_two_hour_forecast` | 2-hour area forecast (all 47 areas or filter by name) | `/two-hr-forecast` |
-| `get_twenty_four_hour_forecast` | Full-day outlook with temp, humidity, wind | `/twenty-four-hr-forecast` |
-| `get_four_day_forecast` | 4-day medium-range forecast | `/four-day-weather-forecast` |
-| `get_realtime_temperature` | Live °C readings from NEA stations | `/air-temperature` |
-| `get_realtime_humidity` | Live % humidity from NEA stations | `/relative-humidity` |
+### Frontend only
 
-### Backend BFF (`backend/`)
+```bash
+cd frontend
+podman build --target builder -t frontend-builder:local .
+CID=$(podman create frontend-builder:local)
+podman cp ${CID}:/app/dist ./dist && podman rm ${CID}
+podman build --platform linux/amd64 \
+  --build-arg BUILD_TIME=$(date +%Y%m%d-%H%M) \
+  -t ${REGISTRY}/${NAMESPACE}/frontend:latest \
+  -f - . <<'EOF'
+FROM registry.access.redhat.com/ubi9/nginx-120:latest
+COPY dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/nginx.conf
+EXPOSE 8080
+CMD ["nginx", "-g", "daemon off;"]
+EOF
+podman push ${REGISTRY}/${NAMESPACE}/frontend:latest --tls-verify=false
+oc rollout restart deployment/frontend -n ${NAMESPACE}
+cd ..
+```
 
-FastAPI service acting as:
-- **MCP client** — discovers tools on startup, executes them during agentic loops
-- **LLM orchestrator** — routes chat to the selected model, injects tool results back
-- **SSE streamer** — streams tokens + tool call events + map highlight events to frontend
-- **Admin API** — proxies vLLM `/metrics`, aggregates MCP call log via SSE
+### MCP server only
 
-### Frontend (`frontend/`)
-
-React + Vite + Tailwind with two tabs:
-
-**User Tab**
-- Left: Chat with `Granite ⇄ Qwen` toggle, streaming responses, collapsible MCP tool call disclosure
-- Right: Leaflet.js map of Singapore — 47 area markers color-coded by forecast, highlights areas mentioned in chat, refreshes every 30s
-
-**Admin Panel**
-- Left: Live vLLM metrics for both models simultaneously (tokens/sec, latency, GPU KV cache, active requests) with a shared comparison chart
-- Right: MCP Monitor — server health badge, tool registry with JSON schemas, live call log (SSE stream), per-tool call count bars, manual test-call form
+```bash
+podman build --platform linux/amd64 -t ${REGISTRY}/${NAMESPACE}/mcp-server:latest ./mcp-server
+podman push ${REGISTRY}/${NAMESPACE}/mcp-server:latest --tls-verify=false
+oc rollout restart deployment/mcp-server -n ${NAMESPACE}
+```
 
 ---
 
-## Development (local)
+## Local Development
+
+### 1. Copy and fill in environment variables
 
 ```bash
-# Start MCP server
-cd mcp-server && pip install -r requirements.txt
-uvicorn server:app --port 8000 --reload
+cp .env.example backend/.env
+# Edit backend/.env — set GRANITE_ENDPOINT and GRANITE_API_KEY
+```
 
-# Start backend (set env vars first)
-cd backend
-cp ../.env.example .env  # fill in RHOAI endpoints + keys
+### 2. Run the MCP server
+
+```bash
+cd mcp-server
 pip install -r requirements.txt
-uvicorn main:app --port 8080 --reload
+python server.py
+# Listening on http://localhost:8000
+```
 
-# Start frontend
-cd frontend && npm install
-npm run dev   # proxies /chat etc. to :8080
+### 3. Run the backend
+
+```bash
+cd backend
+pip install -r requirements.txt
+uvicorn main:app --reload --port 8080
+# Listening on http://localhost:8080
+```
+
+### 4. Run the frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+# Listening on http://localhost:5173
 ```
 
 ---
 
-## Environment Variables
+## Secrets and Configuration
 
-| Variable | Service | Description |
-|----------|---------|-------------|
-| `GRANITE_ENDPOINT` | backend | Granite-8B `/v1` inference URL |
-| `GRANITE_API_KEY` | backend | Bearer token for Granite-8B |
-| `GRANITE_MODEL_NAME` | backend | Model ID string for the API call |
-| `QWEN_ENDPOINT` | backend | Qwen3-8B `/v1` inference URL (Route) |
-| `QWEN_API_KEY` | backend | Bearer token for Qwen3-8B |
-| `QWEN_MODEL_NAME` | backend | Model ID string for the API call |
-| `MCP_SERVER_URL` | backend | Internal cluster URL of MCP server |
-| `CORS_ORIGINS` | backend | Comma-separated allowed origins |
-| `DATA_GOV_SG_API_KEY` | mcp-server | Optional API key for data.gov.sg |
+All secrets are stored as OpenShift Secrets and referenced by `secretKeyRef` in the Deployment — **no credentials are stored in this repository**.
+
+| Secret name | Key | Used for |
+|------------|-----|---------|
+| `default-token-granite-8b-sa` | `token` | Granite-8B vLLM bearer token |
+| `default-token-qwen3-8b-sa` | `token` | Qwen3-8B vLLM bearer token |
+
+These secrets are auto-created by OpenShift when the model's ServiceAccount is created in RHOAI.
+
+### Backend ConfigMap (`openshift/backend/configmap.yaml`)
+
+| Key | Value | Notes |
+|-----|-------|-------|
+| `GRANITE_ENDPOINT` | `https://granite-8b-predictor.maas-demo.svc.cluster.local:8443/v1` | In-cluster |
+| `GRANITE_MODEL_NAME` | `granite-8b` | Must match the InferenceService name |
+| `GRANITE_VERIFY_SSL` | `false` | Self-signed cert inside cluster |
+| `QWEN_ENDPOINT` | `https://qwen3-8b-predictor.maas-demo.svc.cluster.local:8443/v1` | In-cluster |
+| `QWEN_MODEL_NAME` | `qwen3-8b` | Must match the InferenceService name |
+| `QWEN_VERIFY_SSL` | `false` | Self-signed cert inside cluster |
+| `MCP_SERVER_URL` | `http://mcp-server.maas-demo.svc.cluster.local:8000` | In-cluster |
+
+To add a new model:
+1. Deploy it in RHOAI as an InferenceService
+2. Add its endpoint and model name to `configmap.yaml`
+3. Add its SA token secret reference to `deployment.yaml`
+4. Add it to `backend/config.py` `MODELS` dict
+5. Rebuild and push the backend image
 
 ---
 
-## OpenShift AI Capabilities Demonstrated
+## Enabling / Disabling Qwen
 
-| Capability | Where shown |
-|-----------|-------------|
-| KServe single-model serving (RawDeployment) | Both InferenceService YAMLs |
-| vLLM ServingRuntime with OpenAI-compatible API | Chat completions in BFF |
-| Bearer token auth on inference routes | `GRANITE_API_KEY` / `QWEN_API_KEY` |
-| ServiceMonitor for Prometheus scraping | `monitoring/` manifests |
-| Multi-model comparison | Admin panel metrics cards |
-| HorizontalPodAutoscaler on BFF | `backend/hpa.yaml` |
-| Liveness/readiness probes on all workloads | All deployment YAMLs |
-| OpenShift Route with TLS edge termination | `frontend/route.yaml` |
-| UBI-based container images | All Dockerfiles |
+Set `QWEN_ENDPOINT` to empty string in `configmap.yaml` to disable Qwen:
+
+```yaml
+QWEN_ENDPOINT: ""
+```
+
+Restore the full URL to re-enable it. No code changes needed.
+
+---
+
+## Monitoring
+
+- **vLLM metrics**: Admin Panel → Metrics tab (fetches from `/metrics` on each model's endpoint)
+- **MCP live call log**: Admin Panel → MCP Monitor tab (SSE stream of every tool call)
+- **Prometheus**: A `ServiceMonitor` in `openshift/monitoring/` scrapes vLLM metrics automatically if the OpenShift User Workload Monitoring stack is enabled
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---------|-------------|-----|
+| `404 model does not exist` | `GRANITE_MODEL_NAME` wrong | Check `oc get inferenceservice -n maas-demo` for the actual name |
+| `406 Not Acceptable` from MCP | Old backend image without Accept header fix | Rebuild and push backend |
+| `Exec format error` on pod start | Image built for wrong architecture | Rebuild with `--platform linux/amd64` |
+| Map shows "failed to load" | data.gov.sg rate limit or network | Backend retries automatically; wait 60s |
+| Chat history lost on tab switch | Browser serving old JS bundle | Hard refresh once (Cmd+Shift+R) |
+| Pods in CrashLoopBackOff | Check logs: `oc logs -l app=backend -n maas-demo` | See error table above |

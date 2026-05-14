@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import UserTab from './components/UserTab'
 import AdminTab from './components/AdminTab'
 import type { ChatMessage, ModelKey } from './types'
@@ -8,49 +8,90 @@ type Tab = 'user' | 'admin'
 let msgCounter = 0
 export const newMsgId = () => `msg-${++msgCounter}`
 
-const SESSION_KEY = 'maas_chat_messages'
-const MODEL_KEY   = 'maas_chat_model'
+// Build stamp injected by Vite at build time
+const BUILD_TIME: string = import.meta.env.VITE_BUILD_TIME ?? 'dev'
+
+// localStorage keys
+const LS_MESSAGES = 'maas_chat_messages'
+const LS_MODEL    = 'maas_chat_model'
+const LS_THEME    = 'maas_theme_mode'
+
+function save(key: string, value: unknown) {
+  try { localStorage.setItem(key, JSON.stringify(value)) } catch { /* quota / private mode */ }
+}
 
 function loadMessages(): ChatMessage[] {
   try {
-    const raw = sessionStorage.getItem(SESSION_KEY)
-    if (raw) {
-      const parsed: ChatMessage[] = JSON.parse(raw)
-      // Ensure no message is stuck in streaming state after a reload
-      return parsed.map(m => ({ ...m, streaming: false }))
-    }
+    const raw = localStorage.getItem(LS_MESSAGES)
+    if (raw) return (JSON.parse(raw) as ChatMessage[]).map(m => ({ ...m, streaming: false }))
   } catch { /* ignore */ }
   return []
 }
 
 function loadModel(): ModelKey {
   try {
-    const v = sessionStorage.getItem(MODEL_KEY)
-    if (v === 'granite' || v === 'qwen') return v
+    const v = localStorage.getItem(LS_MODEL)
+    if (v === 'granite' || v === 'qwen') return v as ModelKey
   } catch { /* ignore */ }
   return 'granite'
+}
+
+function loadTheme(): 'light' | 'dark' {
+  try {
+    const v = localStorage.getItem(LS_THEME)
+    if (v === 'light' || v === 'dark') return v
+  } catch { /* ignore */ }
+  return 'dark'
 }
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('user')
 
-  // Chat state at root — survives tab switching.
-  // sessionStorage provides a second layer of persistence across reloads.
-  const [messages, setMessages] = useState<ChatMessage[]>(loadMessages)
-  const [model, setModel] = useState<ModelKey>(loadModel)
+  // ALL chat state at root — never lost by tab switching.
+  // Saved to localStorage synchronously inside every setter call so nothing
+  // can be lost between a state update and an async effect firing.
+  const [messages, _setMessages] = useState<ChatMessage[]>(loadMessages)
+  const [model, _setModel]       = useState<ModelKey>(loadModel)
   const [availableModels, setAvailableModels] = useState<ModelKey[]>(['granite'])
+  const [theme, setTheme] = useState<'light' | 'dark'>(loadTheme)
 
-  // Persist messages and model to sessionStorage on every change
-  useEffect(() => {
-    try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(messages)) } catch { /* ignore */ }
-  }, [messages])
+  const setMessages = useCallback<React.Dispatch<React.SetStateAction<ChatMessage[]>>>(
+    (action) => {
+      _setMessages(prev => {
+        const next = typeof action === 'function' ? action(prev) : action
+        save(LS_MESSAGES, next)
+        return next
+      })
+    },
+    [],
+  )
+
+  const setModel = useCallback((m: ModelKey) => {
+    _setModel(m)
+    save(LS_MODEL, m)
+  }, [])
 
   useEffect(() => {
-    try { sessionStorage.setItem(MODEL_KEY, model) } catch { /* ignore */ }
-  }, [model])
+    fetch('/admin/info')
+      .then(r => r.json())
+      .then(data => {
+        const models: ModelKey[] = data.available_models ?? ['granite']
+        setAvailableModels(models)
+        if (!models.includes(model)) setModel(models[0])
+      })
+      .catch(() => { /* keep default */ })
+  }, [model, setModel])
+
+  const toggleTheme = useCallback(() => {
+    setTheme(prev => {
+      const next = prev === 'dark' ? 'light' : 'dark'
+      save(LS_THEME, next)
+      return next
+    })
+  }, [])
 
   return (
-    <div className="flex flex-col h-screen bg-rh-darker overflow-hidden">
+    <div className={`flex flex-col h-screen bg-rh-darker overflow-hidden theme-${theme}`}>
       {/* Header */}
       <header className="flex items-center gap-4 px-6 py-3 bg-rh-dark border-b border-rh-border shrink-0">
         <div className="flex items-center gap-2">
@@ -64,6 +105,7 @@ export default function App() {
         <div className="flex gap-1 ml-4 bg-rh-surface rounded-lg p-1">
           {(['user', 'admin'] as Tab[]).map(tab => (
             <button
+              type="button"
               key={tab}
               onClick={() => setActiveTab(tab)}
               className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors capitalize ${
@@ -77,7 +119,16 @@ export default function App() {
           ))}
         </div>
 
-        <div className="ml-auto flex items-center gap-2 text-xs text-rh-muted">
+        <div className="ml-auto flex items-center gap-3 text-xs text-rh-muted">
+          <button
+            type="button"
+            onClick={toggleTheme}
+            className="px-2.5 py-1 rounded-md border border-rh-border bg-rh-surface text-rh-text hover:border-rh-red/40 transition-colors"
+            title="Toggle light/dark mode"
+          >
+            {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+          </button>
+          <span className="hidden sm:block opacity-50">build {BUILD_TIME}</span>
           <span className="w-2 h-2 rounded-full bg-green-400 inline-block" />
           <span>maas-demo namespace</span>
         </div>
@@ -98,9 +149,6 @@ export default function App() {
             messages={messages}
             setMessages={setMessages}
             model={model}
-            setModel={setModel}
-            availableModels={availableModels}
-            setAvailableModels={setAvailableModels}
           />
         </div>
         <div
@@ -110,7 +158,11 @@ export default function App() {
             pointerEvents: activeTab === 'admin' ? 'auto' : 'none',
           }}
         >
-          <AdminTab />
+          <AdminTab
+            model={model}
+            setModel={setModel}
+            availableModels={availableModels}
+          />
         </div>
       </main>
     </div>
